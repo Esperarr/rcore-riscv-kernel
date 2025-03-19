@@ -17,6 +17,7 @@ mod task;
 use crate::config::MAX_APP_NUM;
 use crate::loader::{get_num_app, init_app_cx};
 use crate::sync::UPSafeCell;
+use alloc::collections::btree_map::BTreeMap;
 use lazy_static::*;
 use switch::__switch;
 pub use task::{TaskControlBlock, TaskStatus};
@@ -34,17 +35,19 @@ pub use context::TaskContext;
 /// existing functions on `TaskManager`.
 pub struct TaskManager {
     /// total number of tasks
-    num_app: usize,
+    pub num_app: usize,
     /// use inner value to get mutable access
-    inner: UPSafeCell<TaskManagerInner>,
+    pub inner: UPSafeCell<TaskManagerInner>,
 }
 
 /// Inner of Task Manager
 pub struct TaskManagerInner {
     /// task list
-    tasks: [TaskControlBlock; MAX_APP_NUM],
+    pub tasks: [TaskControlBlock; MAX_APP_NUM],
     /// id of current `Running` task
-    current_task: usize,
+    pub current_task: usize,
+    /// different task's sys_call times ( Task ID -> Syscall ID -> Count )
+    pub task_sys_call_cnt: BTreeMap<usize, BTreeMap<usize, u32>>,
 }
 
 lazy_static! {
@@ -65,6 +68,13 @@ lazy_static! {
                 UPSafeCell::new(TaskManagerInner {
                     tasks,
                     current_task: 0,
+                    task_sys_call_cnt: {
+                        let mut map = BTreeMap::new();
+                        for i in 0..num_app {
+                            map.insert(i, BTreeMap::new());
+                        }
+                        map
+                    },
                 })
             },
         }
@@ -135,6 +145,17 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
+
+    fn update_syscall_cnt(&self, syscall_id: usize) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.task_sys_call_cnt
+            .entry(current)
+            .or_insert(BTreeMap::new())
+            .entry(syscall_id)
+            .and_modify(|cnt| *cnt += 1)
+            .or_insert(1);
+    }
 }
 
 /// Run the first task in task list.
@@ -168,4 +189,9 @@ pub fn suspend_current_and_run_next() {
 pub fn exit_current_and_run_next() {
     mark_current_exited();
     run_next_task();
+}
+
+/// Updates the count for the specified system call ID.
+pub fn update_syscall_cnt(syscall_id: usize) {
+    TASK_MANAGER.update_syscall_cnt(syscall_id);
 }

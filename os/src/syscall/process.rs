@@ -1,8 +1,10 @@
 //! Process management syscalls
 use crate::{
-    task::{exit_current_and_run_next, suspend_current_and_run_next},
+    task::{exit_current_and_run_next, suspend_current_and_run_next, TASK_MANAGER},
     timer::get_time_us,
 };
+use alloc::collections::btree_map::BTreeMap;
+
 
 #[repr(C)]
 #[derive(Debug)]
@@ -38,8 +40,27 @@ pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
     0
 }
 
-// TODO: implement the syscall
-pub fn sys_trace(_trace_request: usize, _id: usize, _data: usize) -> isize {
+pub fn sys_trace(trace_request: usize, id: usize, data: usize) -> isize {
     trace!("kernel: sys_trace");
-    -1
+    let mut inner = TASK_MANAGER.inner.exclusive_access();
+    let current_task_id = inner.current_task;
+    let result=match trace_request {
+        0 => {
+            let addr = id as *const u8;
+            unsafe{ addr.read_volatile() as isize }
+        }
+        1=> {
+            let addr = id as *mut u8;
+            unsafe{ addr.write_volatile(data as u8) }
+            0
+        }
+        2=> {
+            let task_syscall_cnt = inner.task_sys_call_cnt.entry(current_task_id).or_insert_with(BTreeMap::new);
+            let count = task_syscall_cnt.get(&id).copied().unwrap_or(0);
+            count as isize // 返回调用次数
+        }
+        _ => -1,
+    };
+    drop(inner);
+    result
 }
