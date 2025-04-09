@@ -18,6 +18,7 @@ use crate::loader::{get_app_data, get_num_app};
 use crate::sync::UPSafeCell;
 use crate::trap::TrapContext;
 use alloc::vec::Vec;
+use alloc::collections::btree_map::BTreeMap;
 use lazy_static::*;
 use switch::__switch;
 pub use task::{TaskControlBlock, TaskStatus};
@@ -35,18 +36,21 @@ pub use context::TaskContext;
 /// existing functions on `TaskManager`.
 pub struct TaskManager {
     /// total number of tasks
-    num_app: usize,
+    pub num_app: usize,
     /// use inner value to get mutable access
-    inner: UPSafeCell<TaskManagerInner>,
+    pub inner: UPSafeCell<TaskManagerInner>,
 }
 
 /// The task manager inner in 'UPSafeCell'
-struct TaskManagerInner {
+pub struct TaskManagerInner {
     /// task list
     tasks: Vec<TaskControlBlock>,
     /// id of current `Running` task
-    current_task: usize,
+    pub current_task: usize,
+    /// different task's sys_call times ( Task ID -> Syscall ID -> Count )
+    pub task_sys_call_cnt: BTreeMap<usize, BTreeMap<usize, u32>>,
 }
+
 
 lazy_static! {
     /// a `TaskManager` global instance through lazy_static!
@@ -64,6 +68,13 @@ lazy_static! {
                 UPSafeCell::new(TaskManagerInner {
                     tasks,
                     current_task: 0,
+                    task_sys_call_cnt: {
+                        let mut map = BTreeMap::new();
+                        for i in 0..num_app {
+                            map.insert(i, BTreeMap::new());
+                        }
+                        map
+                    },
                 })
             },
         }
@@ -153,6 +164,17 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
+
+    fn update_syscall_cnt(&self, syscall_id: usize) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.task_sys_call_cnt
+            .entry(current)
+            .or_insert(BTreeMap::new())
+            .entry(syscall_id)
+            .and_modify(|cnt| *cnt += 1)
+            .or_insert(1);
+    }
 }
 
 /// Run the first task in task list.
@@ -201,4 +223,10 @@ pub fn current_trap_cx() -> &'static mut TrapContext {
 /// Change the current 'Running' task's program break
 pub fn change_program_brk(size: i32) -> Option<usize> {
     TASK_MANAGER.change_current_program_brk(size)
+}
+
+
+/// Updates the count for the specified system call ID.
+pub fn update_syscall_cnt(syscall_id: usize) {
+    TASK_MANAGER.update_syscall_cnt(syscall_id);
 }
