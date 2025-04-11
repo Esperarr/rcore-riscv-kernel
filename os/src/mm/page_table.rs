@@ -1,6 +1,6 @@
 //! Implementation of [`PageTableEntry`] and [`PageTable`].
 
-use super::{frame_alloc, FrameTracker, PhysPageNum, StepByOne, VirtAddr, VirtPageNum};
+use super::{frame_alloc, FrameTracker, PhysPageNum, StepByOne, VirtAddr, VirtPageNum, PhysAddr};
 use alloc::vec;
 use alloc::vec::Vec;
 use bitflags::*;
@@ -133,6 +133,26 @@ impl PageTable {
         }
         result
     }
+    /// Translate virtual address to physical address with permission check
+    pub fn check_and_translate_va(&self, va: VirtAddr, need_write: bool) -> Option<PhysAddr> {
+        let vpn = va.floor();
+        // Try to find the page table entry
+        if let Some(pte) = self.find_pte(vpn) {
+            if !pte.is_valid() || 
+               !pte.flags().contains(PTEFlags::U) ||
+               (!pte.readable() && !need_write) ||
+               (need_write && !pte.writable()) {
+                return None;
+            }
+            // Calculate physical address: PPN + page offset
+            let ppn = pte.ppn();
+            let offset = va.page_offset();
+            Some(PhysAddr::from((ppn.0 << 12) + offset))
+        } else {
+            None
+        }
+    }
+
     /// set the map between virtual page number and physical page number
     #[allow(unused)]
     pub fn map(&mut self, vpn: VirtPageNum, ppn: PhysPageNum, flags: PTEFlags) {
@@ -140,6 +160,7 @@ impl PageTable {
         assert!(!pte.is_valid(), "vpn {:?} is mapped before mapping", vpn);
         *pte = PageTableEntry::new(ppn, flags | PTEFlags::V);
     }
+
     /// remove the map between virtual page number and physical page number
     #[allow(unused)]
     pub fn unmap(&mut self, vpn: VirtPageNum) {
@@ -147,10 +168,12 @@ impl PageTable {
         assert!(pte.is_valid(), "vpn {:?} is invalid before unmapping", vpn);
         *pte = PageTableEntry::empty();
     }
+
     /// get the page table entry from the virtual page number
     pub fn translate(&self, vpn: VirtPageNum) -> Option<PageTableEntry> {
         self.find_pte(vpn).map(|pte| *pte)
     }
+
     /// get the token from the page table
     pub fn token(&self) -> usize {
         8usize << 60 | self.root_ppn.0

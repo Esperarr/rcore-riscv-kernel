@@ -175,6 +175,22 @@ impl TaskManager {
             .and_modify(|cnt| *cnt += 1)
             .or_insert(1);
     }
+
+    /// Create a memory mapping in current task's address space
+    /// Returns 0 on success, -1 on failure
+    fn mmap(&self, start: usize, len: usize, prot: usize) -> isize {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].mmap(start, len, prot)
+    }
+    
+    /// Remove a memory mapping from current task's address space
+    /// Returns 0 on success, -1 on failure
+    fn munmap(&self, start: usize, len: usize) -> isize {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].munmap(start, len)
+    }
 }
 
 /// Run the first task in task list.
@@ -229,4 +245,14 @@ pub fn change_program_brk(size: i32) -> Option<usize> {
 /// Updates the count for the specified system call ID.
 pub fn update_syscall_cnt(syscall_id: usize) {
     TASK_MANAGER.update_syscall_cnt(syscall_id);
+}
+
+/// mmap a memory space
+pub fn mmap(start: usize, len: usize, prot: usize)-> isize {
+    TASK_MANAGER.mmap(start, len, prot)
+}
+
+/// munmap a memory space
+pub fn munmap(start: usize, len: usize) -> isize {
+    TASK_MANAGER.munmap(start, len)
 }

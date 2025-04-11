@@ -96,6 +96,16 @@ impl TaskControlBlock {
             None
         }
     }
+
+    /// Create a memory mapping in the task's address space
+    pub fn mmap(&mut self, start: usize, len: usize, post: usize) -> isize {
+        self.memory_set.mmap(start, len, post)
+    }
+
+    /// Remove a memory mapping from the task's address space
+    pub fn munmap(&mut self, start: usize, len: usize) -> isize {
+        self.memory_set.munmap(start, len)
+    }
 }
 
 #[derive(Copy, Clone, PartialEq)]

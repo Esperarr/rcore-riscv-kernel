@@ -248,6 +248,106 @@ impl MemorySet {
         }
     }
 
+    /// Create memory mapping at specified address with prot
+    /// Returns 0 on success, -1 on failure
+    pub fn mmap(&mut self, start: usize, len: usize, prot: usize) -> isize {
+        let start_va: VirtAddr = start.into();
+        let end_va: VirtAddr = (start + len).into();
+        let start_vpn: VirtPageNum = start_va.floor();
+        let end_vpn: VirtPageNum = end_va.ceil();
+        // check if port avalible
+        if prot & 0x7 == 0 || prot & !0x7 != 0 {
+            return -1;
+        }
+        // Check if any page in range is already mapped
+        let mut any_mapped = false;
+        let mut current_vpn = start_vpn.0;
+        while current_vpn < end_vpn.0 {
+            match self.translate(VirtPageNum(current_vpn)) {
+                Some(entry) if entry.is_valid() => {
+                    any_mapped = true;
+                    break;
+                },
+                _ => current_vpn += 1,
+            }
+        }
+        if any_mapped {
+            return -1;
+        }
+        // Convert protection bits to MapPermission
+        let permission = MapPermission::U
+            | (if (prot & 0x1) == 0x1 { MapPermission::R } else { MapPermission::empty() })
+            | (if (prot & 0x2) == 0x2 { MapPermission::W } else { MapPermission::empty() })
+            | (if (prot & 0x4) == 0x4 { MapPermission::X } else { MapPermission::empty() });
+        self.insert_framed_area(start_va, end_va, permission);
+        return 0;
+    }
+
+    /// Remove memory mapping at specified address range
+    /// Returns 0 on success, -1 on failure
+    pub fn munmap(&mut self, start: usize, len: usize) -> isize {
+        let start_va: VirtAddr = start.into();
+        let end_va: VirtAddr = (start + len).into();
+        let start_vpn: VirtPageNum = start_va.floor();
+        let end_vpn: VirtPageNum = end_va.ceil();
+        // Verify all pages in range are mapped
+        let mut all_mapped = true;
+        let mut current_vpn = start_vpn.0;
+        while current_vpn < end_vpn.0 && all_mapped {
+            let entry = self.translate(VirtPageNum(current_vpn));
+            all_mapped = entry.is_some() && entry.unwrap().is_valid();
+            current_vpn += 1;
+        }
+        if !all_mapped {
+            return -1;
+        }
+        // Process each MapArea that overlaps with the range
+        let mut new_areas = Vec::new();
+        let mut i = 0;
+        while i < self.areas.len() {
+            let area = &self.areas[i];
+            let area_start_vpn: VirtPageNum = area.vpn_range.get_start();
+            let area_end_vpn: VirtPageNum = area.vpn_range.get_end();
+            let area_start_va: VirtAddr = area_start_vpn.into();
+            let area_end_va: VirtAddr = area_end_vpn.into();
+            // Case 1: No overlap - keep area unchanged
+            if area_end_vpn <= start_vpn || area_start_vpn >= end_vpn {
+                i += 1;
+                continue;
+            }
+            // Case 2: Area fully contained - remove entire area
+            if start_vpn <= area_start_vpn && end_vpn >= area_end_vpn {
+                let mut area = self.areas.remove(i);
+                area.unmap(&mut self.page_table);
+                continue; // Don't increment i since we removed an element
+            }
+            // Case 3: Partial overlap - split the area
+            let mut area = self.areas.remove(i);
+            area.unmap_partial(&mut self.page_table, start_vpn, end_vpn);
+            // Create left segment if needed
+            if area_start_vpn < start_vpn {
+                new_areas.push(MapArea::new(
+                    area_start_va,
+                    start_vpn.into(),
+                    area.map_type,
+                    area.map_perm,
+                ));
+            }
+            // Create right segment if needed
+            if area_end_vpn > end_vpn {
+                new_areas.push(MapArea::new(
+                    end_vpn.into(),
+                    area_end_va,
+                    area.map_type,
+                    area.map_perm,
+                ));
+            }
+        }
+        // Add the new split areas
+        self.areas.extend(new_areas);
+        return 0;
+    }
+
     /// append the area to new_end
     #[allow(unused)]
     pub fn append_to(&mut self, start: VirtAddr, new_end: VirtAddr) -> bool {
@@ -301,6 +401,15 @@ impl MapArea {
         }
         let pte_flags = PTEFlags::from_bits(self.map_perm.bits).unwrap();
         page_table.map(vpn, ppn, pte_flags);
+    }
+    pub fn unmap_partial(&mut self, page_table: &mut PageTable, start: VirtPageNum, end: VirtPageNum) {
+        for vpn_id in start.0..end.0 {
+            let vpn = VirtPageNum(vpn_id);
+            let range = start.0..end.0;
+            if range.contains(&vpn.0) {
+                page_table.unmap(vpn);
+            }
+        }
     }
     #[allow(unused)]
     pub fn unmap_one(&mut self, page_table: &mut PageTable, vpn: VirtPageNum) {
