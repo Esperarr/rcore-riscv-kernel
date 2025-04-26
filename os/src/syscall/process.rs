@@ -9,6 +9,10 @@ use crate::{
         suspend_current_and_run_next,
     },
 };
+use crate::mm::{PageTable, VirtAddr};
+use crate::timer::get_time_us;
+use crate::config::PAGE_SIZE;
+use alloc::collections::BTreeMap;
 
 #[repr(C)]
 #[derive(Debug)]
@@ -105,30 +109,53 @@ pub fn sys_waitpid(pid: isize, exit_code_ptr: *mut i32) -> isize {
 /// YOUR JOB: get time with second and microsecond
 /// HINT: You might reimplement it with virtual memory management.
 /// HINT: What if [`TimeVal`] is splitted by two pages ?
-pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
+pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
     trace!(
         "kernel:pid[{}] sys_get_time NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
-    -1
+    let token = current_user_token();
+    let page_table = PageTable::from_token(token);
+    if let Some(pa) = page_table.check_and_translate_va(VirtAddr::from(ts as usize), true) {
+        let time_val = unsafe { &mut *(pa.0 as *mut TimeVal) };
+        let us = get_time_us();
+        *time_val = TimeVal {
+            sec: us / 1_000_000,
+            usec: us % 1_000_000,
+        };
+        0
+    } else {
+        -1
+    }
 }
 
-/// YOUR JOB: Implement mmap.
-pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
+// YOUR JOB: Implement mmap.
+/// mmap is used to allocate memory for a process.
+pub fn sys_mmap(start: usize, len: usize, prot: usize) -> isize {
     trace!(
         "kernel:pid[{}] sys_mmap NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
-    -1
+    if start % PAGE_SIZE != 0 {
+        return -1;
+    }
+    else{
+        mmap(start, len, prot)
+    }
 }
 
-/// YOUR JOB: Implement munmap.
-pub fn sys_munmap(_start: usize, _len: usize) -> isize {
+// YOUR JOB: Implement munmap.
+/// munmap is used to free memory for a process.
+pub fn sys_munmap(start: usize, len: usize) -> isize {
     trace!(
         "kernel:pid[{}] sys_munmap NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
-    -1
+    if start % PAGE_SIZE != 0 {
+        return -1;
+    } else{
+        munmap(start, len)
+    }
 }
 
 /// change data segment size
