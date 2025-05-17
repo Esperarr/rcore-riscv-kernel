@@ -8,13 +8,21 @@ use bitflags::*;
 bitflags! {
     /// page table entry flags
     pub struct PTEFlags: u8 {
+        /// Valid
         const V = 1 << 0;
+        /// Readable
         const R = 1 << 1;
+        /// Writable
         const W = 1 << 2;
+        /// eXecutable
         const X = 1 << 3;
+        /// User
         const U = 1 << 4;
+        /// Global
         const G = 1 << 5;
+        /// Accessed
         const A = 1 << 6;
+        /// Dirty
         const D = 1 << 7;
     }
 }
@@ -125,6 +133,26 @@ impl PageTable {
         }
         result
     }
+    /// Translate virtual address to physical address with permission check
+    pub fn check_and_translate_va(&self, va: VirtAddr, need_write: bool) -> Option<PhysAddr> {
+        let vpn = va.floor();
+        // Try to find the page table entry
+        if let Some(pte) = self.find_pte(vpn) {
+            if !pte.is_valid() || 
+               !pte.flags().contains(PTEFlags::U) ||
+               (!pte.readable() && !need_write) ||
+               (need_write && !pte.writable()) {
+                return None;
+            }
+            // Calculate physical address: PPN + page offset
+            let ppn = pte.ppn();
+            let offset = va.page_offset();
+            Some(PhysAddr::from((ppn.0 << 12) + offset))
+        } else {
+            None
+        }
+    }
+
     /// set the map between virtual page number and physical page number
     #[allow(unused)]
     pub fn map(&mut self, vpn: VirtPageNum, ppn: PhysPageNum, flags: PTEFlags) {
@@ -132,6 +160,7 @@ impl PageTable {
         assert!(!pte.is_valid(), "vpn {:?} is mapped before mapping", vpn);
         *pte = PageTableEntry::new(ppn, flags | PTEFlags::V);
     }
+
     /// remove the map between virtual page number and physical page number
     #[allow(unused)]
     pub fn unmap(&mut self, vpn: VirtPageNum) {
@@ -139,6 +168,7 @@ impl PageTable {
         assert!(pte.is_valid(), "vpn {:?} is invalid before unmapping", vpn);
         *pte = PageTableEntry::empty();
     }
+
     /// get the page table entry from the virtual page number
     pub fn translate(&self, vpn: VirtPageNum) -> Option<PageTableEntry> {
         self.find_pte(vpn).map(|pte| *pte)
