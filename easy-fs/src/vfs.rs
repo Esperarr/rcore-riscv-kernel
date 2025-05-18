@@ -293,12 +293,11 @@ impl Inode {
                 });
             // 若被删除的目录项的inode没有被其他目录项引用，则可以直接删除inode
             // 获取目标 inode 的 nlink 值
-            let nlink = get_block_cache(block_id as usize, Arc::clone(&self.block_device))
+            let nlink_inode = get_block_cache(block_id as usize, Arc::clone(&self.block_device))
                 .lock()
                 .read(block_offset, |disk_inode: &DiskInode| disk_inode.nlink);
             // 直接使用 nlink 判断是否被引用
-            let referenced = nlink > 0;
-            if !referenced {
+            if nlink_inode == 0 {
                 target_inode.modify_disk_inode(|disk_inode| {
                     let size = disk_inode.size;
                     let data_blocks_dealloc = disk_inode.clear_size(&self.block_device);
@@ -307,7 +306,6 @@ impl Inode {
                         fs.dealloc_data(data_block);
                     }
                 });
-                // 这里需要在EasyFileSystem中实现dealloc_inode方法
                 fs.inode_bitmap.dealloc(&self.block_device, inode_id as usize);
             }
             0
@@ -335,14 +333,6 @@ impl Inode {
         })
     }
     /// get the id of the inode
-    // pub fn get_id(&self) -> usize {
-    //     let fs = self.fs.lock();
-    //     let inode_size = core::mem::size_of::<DiskInode>();
-    //     let inodes_per_block = (BLOCK_SZ / inode_size) as u32;
-    //     let block_offset = (self.block_id - fs.inode_area_start_block as usize) as u32;
-    //     let ans_id = block_offset * inodes_per_block + (self.block_offset / inode_size);
-    //     ans_id as usize
-    // }
     pub fn get_id(&self) -> usize {
         let fs = self.fs.lock();
         let inode_size = core::mem::size_of::<DiskInode>();
@@ -351,20 +341,9 @@ impl Inode {
         let ans_id = block_offset * inodes_per_block + self.block_offset / inode_size;
         ans_id
     }
-    /// 判断是否为目录
+    /// if the inode is a directory
     pub fn is_dir(&self) -> bool {
         self.read_disk_inode(|disk_inode| disk_inode.is_dir())
-    }
-    /// get inode by inode id
-    pub fn get_inode_by_id(&self, inode_id: u32) -> Option<Arc<Inode>> {
-        let fs = self.fs.lock();
-        let (block_id, block_offset) = fs.get_disk_inode_pos(inode_id);
-        Some(Arc::new(Self::new(
-            block_id,
-            block_offset,
-            self.fs.clone(),
-            self.block_device.clone(),
-        )))
     }
     /// get nlink of the inode(inode-inode id)
     pub fn get_nlink(&self, inode_id: usize) -> usize {

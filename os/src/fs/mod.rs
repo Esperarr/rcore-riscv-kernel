@@ -3,7 +3,7 @@
 pub mod inode;
 mod stdio;
 
-pub use inode::{open_file, OpenFlags, link, unlink, get_nlink, get_mode, get_inode_by_id, list_apps, OSInode};
+pub use inode::{open_file, OpenFlags, link, unlink, get_nlink, get_mode, list_apps, OSInode};
 
 use crate::mm::UserBuffer;
 /// trait File for all file types

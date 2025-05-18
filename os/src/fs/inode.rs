@@ -139,10 +139,6 @@ pub fn link(old_name: &str, new_name: &str) -> isize {
 pub fn unlink(name: &str) -> isize {
     ROOT_INODE.unlinkat(name)
 }
-/// get inode by id
-pub fn get_inode_by_id(inode_id: u32) -> Option<Arc<Inode>> {
-    ROOT_INODE.get_inode_by_id(inode_id)
-}
 /// get nlink count
 pub fn get_nlink(inode_id: usize) -> usize {
     ROOT_INODE.get_nlink(inode_id)

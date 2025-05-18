@@ -17,11 +17,30 @@ pub fn sys_write(fd: usize, buf: *const u8, len: usize) -> isize {
         let file = file.clone();
         // release current task TCB manually to avoid multi-borrow
         drop(inner);
-        // // 优化：只在写入大量数据时进行日志记录
-        // if len > 1024 {
-        //     trace!("kernel:pid[{}] sys_write large data: {} bytes", task.pid.0, len);
-        // }
-        file.write(UserBuffer::new(translated_byte_buffer(token, buf, len))) as isize
+        
+        // 优化：对于大块数据，直接一次性写入
+        if len > 4096 {
+            let buffers = translated_byte_buffer(token, buf, len);
+            file.write(UserBuffer::new(buffers)) as isize
+        } else {
+            // 对于小块数据，分批写入以减少内存压力
+            let mut total_written = 0;
+            let mut remaining = len;
+            let mut current_buf = buf;
+            
+            while remaining > 0 {
+                let chunk_size = remaining.min(1024);
+                let buffers = translated_byte_buffer(token, current_buf, chunk_size);
+                let written = file.write(UserBuffer::new(buffers));
+                total_written += written;
+                remaining -= written;
+                current_buf = unsafe { current_buf.add(written) };
+                if written == 0 {
+                    break;
+                }
+            }
+            total_written as isize
+        }
     } else {
         -1
     }
