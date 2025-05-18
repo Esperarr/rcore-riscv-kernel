@@ -1,10 +1,11 @@
 //! File trait & inode(dir, file, pipe, stdin, stdout)
 
-mod inode;
+pub mod inode;
 mod stdio;
 
-use crate::mm::UserBuffer;
+pub use inode::{open_file, OpenFlags, link, unlink, get_nlink, get_mode, get_inode_by_id, list_apps, OSInode};
 
+use crate::mm::UserBuffer;
 /// trait File for all file types
 pub trait File: Send + Sync {
     /// the file readable?
@@ -15,6 +16,8 @@ pub trait File: Send + Sync {
     fn read(&self, buf: UserBuffer) -> usize;
     /// write to the file from buf, return the number of bytes written
     fn write(&self, buf: UserBuffer) -> usize;
+    /// get nodeid
+    fn get_inodeid(&self) -> usize;
 }
 
 /// The stat of a inode
@@ -30,7 +33,7 @@ pub struct Stat {
     /// number of hard links
     pub nlink: u32,
     /// unused pad
-    pad: [u64; 7],
+    pub pad: [u64; 7],
 }
 
 bitflags! {
@@ -46,5 +49,4 @@ bitflags! {
     }
 }
 
-pub use inode::{list_apps, open_file, OSInode, OpenFlags};
 pub use stdio::{Stdin, Stdout};

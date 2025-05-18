@@ -11,7 +11,9 @@ use crate::sync::UPSafeCell;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use bitflags::*;
-use easy_fs::{EasyFileSystem, Inode};
+use easy_fs::{EasyFileSystem, Inode, DiskInodeType};
+// 在 fs/inode.rs 文件中
+use super::StatMode;
 use lazy_static::*;
 
 /// inode in memory
@@ -53,9 +55,14 @@ impl OSInode {
         }
         v
     }
+    /// get the inode id
+    pub fn get_id(&self) -> usize {
+        let inner = self.inner.exclusive_access();
+        inner.inode.get_id()
+    }
 }
-
 lazy_static! {
+    /// root inode
     pub static ref ROOT_INODE: Arc<Inode> = {
         let efs = EasyFileSystem::open(BLOCK_DEVICE.clone());
         Arc::new(EasyFileSystem::root_inode(&efs))
@@ -124,6 +131,40 @@ pub fn open_file(name: &str, flags: OpenFlags) -> Option<Arc<OSInode>> {
         })
     }
 }
+/// link file
+pub fn link(old_name: &str, new_name: &str) -> isize {
+    ROOT_INODE.linkat(old_name, new_name)
+}
+/// unlink file
+pub fn unlink(name: &str) -> isize {
+    ROOT_INODE.unlinkat(name)
+}
+/// get inode by id
+pub fn get_inode_by_id(inode_id: u32) -> Option<Arc<Inode>> {
+    ROOT_INODE.get_inode_by_id(inode_id)
+}
+/// get nlink count
+pub fn get_nlink(inode_id: usize) -> usize {
+    ROOT_INODE.get_nlink(inode_id)
+}
+/// get file mode
+pub fn get_mode(inode_id: usize) -> StatMode {
+    let inode_type = ROOT_INODE.get_mode(inode_id);
+    match inode_type {
+            DiskInodeType::File => StatMode::FILE,
+            DiskInodeType::Directory => StatMode::DIR,
+    }
+}
+
+/// get inode id
+pub fn file_id(name: &str) -> usize {
+    if let Some(inode) = ROOT_INODE.find(name) {
+        inode.get_id() as usize
+    } else {
+        0
+    }
+}
+
 
 impl File for OSInode {
     fn readable(&self) -> bool {
@@ -155,5 +196,8 @@ impl File for OSInode {
             total_write_size += write_size;
         }
         total_write_size
+    }
+    fn get_inodeid(&self) -> usize {
+        return self.get_id();
     }
 }

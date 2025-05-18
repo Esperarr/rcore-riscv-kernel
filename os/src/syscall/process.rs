@@ -3,7 +3,6 @@
 use alloc::sync::Arc;
 
 use crate::{
-    loader::get_app_data_by_name,
     config::MAX_SYSCALL_NUM,
     fs::{open_file, OpenFlags},
     mm::{translated_refmut, translated_str},
@@ -193,9 +192,10 @@ pub fn sys_spawn(path: *const u8) -> isize {
     );
     let token = current_user_token();
     let path = translated_str(token, path);
-    if let Some(data) = get_app_data_by_name(path.as_str()) {
+    if let Some(data) = open_file(path.as_str(), OpenFlags::RDONLY) {
+        let data_all = data.read_all();
         let current_task = current_task().unwrap();
-        let new_task = current_task.spawn(data);
+        let new_task = current_task.spawn(data_all.as_slice());
         let new_pid = new_task.pid.0;
         add_task(new_task);
         new_pid as isize
