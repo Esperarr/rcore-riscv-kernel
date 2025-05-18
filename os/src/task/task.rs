@@ -298,6 +298,7 @@ impl TaskControlBlock {
                     parent: Some(Arc::downgrade(self)),
                     children: Vec::new(),
                     exit_code: 0,
+                    // 请教助教，发现此处未进行fd_table初始化
                     fd_table: vec![
                         // 0 -> stdin
                         Some(Arc::new(Stdin)),

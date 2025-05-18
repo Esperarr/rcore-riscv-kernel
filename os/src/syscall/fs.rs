@@ -77,6 +77,7 @@ pub fn sys_close(fd: usize) -> isize {
 
 /// YOUR JOB: Implement fstat.
 pub fn sys_fstat(fd: usize, st: *mut Stat) -> isize {
+    // 该功能的实现（首先获取inodeid，之后基于inodeid实现状态读取）的思路部分借鉴了https://github.com/chuanmx20/OS-Lab/tree/ch6
     trace!(
         "kernel:pid[{}] sys_fstat",
         current_task().unwrap().pid.0
