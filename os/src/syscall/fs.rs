@@ -4,7 +4,6 @@ use crate::mm::{translated_byte_buffer, translated_str, translated_refmut, UserB
 use crate::task::{current_task, current_user_token};
 
 pub fn sys_write(fd: usize, buf: *const u8, len: usize) -> isize {
-    // trace!("kernel:pid[{}] sys_write", current_task().unwrap().pid.0);
     let token = current_user_token();
     let task = current_task().unwrap();
     let inner = task.inner_exclusive_access();
@@ -18,6 +17,10 @@ pub fn sys_write(fd: usize, buf: *const u8, len: usize) -> isize {
         let file = file.clone();
         // release current task TCB manually to avoid multi-borrow
         drop(inner);
+        // // 优化：只在写入大量数据时进行日志记录
+        // if len > 1024 {
+        //     trace!("kernel:pid[{}] sys_write large data: {} bytes", task.pid.0, len);
+        // }
         file.write(UserBuffer::new(translated_byte_buffer(token, buf, len))) as isize
     } else {
         -1
@@ -62,7 +65,7 @@ pub fn sys_open(path: *const u8, flags: u32) -> isize {
 }
 
 pub fn sys_close(fd: usize) -> isize {
-    trace!("kernel:pid[{}] sys_close", current_task().unwrap().pid.0);
+    // trace!("kernel:pid[{}] sys_close", current_task().unwrap().pid.0);
     let task = current_task().unwrap();
     let mut inner = task.inner_exclusive_access();
     if fd >= inner.fd_table.len() {
@@ -78,10 +81,10 @@ pub fn sys_close(fd: usize) -> isize {
 /// YOUR JOB: Implement fstat.
 pub fn sys_fstat(fd: usize, st: *mut Stat) -> isize {
     // 该功能的实现（首先获取inodeid，之后基于inodeid实现状态读取）的思路部分借鉴了https://github.com/chuanmx20/OS-Lab/tree/ch6
-    trace!(
-        "kernel:pid[{}] sys_fstat",
-        current_task().unwrap().pid.0
-    );
+    // trace!(
+    //     "kernel:pid[{}] sys_fstat",
+    //     current_task().unwrap().pid.0
+    // );
     let token = current_user_token();
     let task = current_task().unwrap();
     let inner = task.inner_exclusive_access();
@@ -109,10 +112,10 @@ pub fn sys_fstat(fd: usize, st: *mut Stat) -> isize {
 
 /// YOUR JOB: Implement linkat.
 pub fn sys_linkat(old_name: *const u8, new_name: *const u8) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_linkat",
-        current_task().unwrap().pid.0
-    );
+    // trace!(
+    //     "kernel:pid[{}] sys_linkat",
+    //     current_task().unwrap().pid.0
+    // );
     let token = current_user_token();
     let old_name_ = translated_str(token, old_name);
     let new_name_ = translated_str(token, new_name);
@@ -125,10 +128,10 @@ pub fn sys_linkat(old_name: *const u8, new_name: *const u8) -> isize {
 
 /// YOUR JOB: Implement unlinkat.
 pub fn sys_unlinkat(name: *const u8) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_unlinkat",
-        current_task().unwrap().pid.0
-    );
+    // trace!(
+    //     "kernel:pid[{}] sys_unlinkat",
+    //     current_task().unwrap().pid.0
+    // );
     let token = current_user_token();
     let name_ = translated_str(token, name);
     // if name == "" {// file name is empty, file not exist

@@ -171,7 +171,10 @@ impl Inode {
             self.increase_size((offset + buf.len()) as u32, disk_inode, &mut fs);
             disk_inode.write_at(offset, buf, &self.block_device)
         });
-        block_cache_sync_all();
+        // 只在写入大量数据时同步缓存
+        if buf.len() > BLOCK_SZ {
+            block_cache_sync_all();
+        }
         size
     }
     /// Clear the data in current inode
@@ -228,94 +231,6 @@ impl Inode {
         block_cache_sync_all();
         res
     }
-    // /// Unlink a file under current inode by name
-    // pub fn unlinkat(&self, name: &str) -> isize {
-    //     let mut fs = self.fs.lock();
-    //     // 检查文件是否存在
-    //     let inode_id = self.read_disk_inode(|disk_inode| {
-    //         self.find_inode_id(name, disk_inode)
-    //     });
-    //     if inode_id.is_none() {
-    //         return -1;
-    //     }
-    //     let inode_id = inode_id.unwrap();
-    //     // 获取目标inode
-    //     let (block_id, block_offset) = fs.get_disk_inode_pos(inode_id);
-    //     let target_inode = Self::new(
-    //         block_id,
-    //         block_offset,
-    //         self.fs.clone(),
-    //         self.block_device.clone(),
-    //     );
-    //     // 删除目录项
-    //     let res = self.modify_disk_inode(|root_inode| {
-    //         // 确保是目录
-    //         assert!(root_inode.is_dir());
-    //         let file_count = (root_inode.size as usize) / DIRENT_SZ;
-    //         let mut dirent = DirEntry::empty();
-    //         let mut found = false;
-    //         let mut found_idx = None;
-    //         // 查找目标文件
-    //         for i in 0..file_count {
-    //             assert_eq!(
-    //                 root_inode.read_at(DIRENT_SZ * i, dirent.as_bytes_mut(), &self.block_device,),
-    //                 DIRENT_SZ,
-    //             );
-    //             if dirent.name() == name {
-    //                 found = true;
-    //                 found_idx = Some(i);
-    //                 break;
-    //             }
-    //         }
-    //         if !found || found_idx.is_none() {
-    //             return -1;
-    //         }
-    //         let idx = found_idx.unwrap();
-    //         // 检查inode是否被其他目录项引用
-    //         let mut referenced = false;
-    //         let mut check_dirent = DirEntry::empty();
-    //         for i in 0..file_count {
-    //             if i == idx {
-    //                 continue;
-    //             }
-    //             assert_eq!(
-    //                 root_inode.read_at(DIRENT_SZ * i, check_dirent.as_bytes_mut(), &self.block_device,),
-    //                 DIRENT_SZ,
-    //             );
-    //             if check_dirent.inode_id() as u32 == inode_id {
-    //                 referenced = true;
-    //                 break;
-    //             }
-    //         }
-    //         // 若被删除的目录项不在最后，则需要将最后一个目录项移动到被删除的目录项的位置
-    //         let mut last_dirent = DirEntry::empty();
-    //         if idx < file_count - 1 {
-    //             assert_eq!(
-    //                 root_inode.read_at(DIRENT_SZ * (file_count - 1), last_dirent.as_bytes_mut(), &self.block_device,),
-    //                 DIRENT_SZ,
-    //             );
-    //             root_inode.write_at(DIRENT_SZ * idx, last_dirent.as_bytes(), &self.block_device);
-    //         }
-    //         // 更新目录大小
-    //         root_inode.size -= DIRENT_SZ as u32;
-    //         // 若被删除的目录项的inode没有被其他目录项引用，则可以直接删除inode
-    //         if !referenced {
-    //             target_inode.modify_disk_inode(|disk_inode| {
-    //                 let size = disk_inode.size;
-    //                 let data_blocks_dealloc = disk_inode.clear_size(&self.block_device);
-    //                 assert_eq!(data_blocks_dealloc.len(), DiskInode::total_blocks(size) as usize);
-    //                 for data_block in data_blocks_dealloc.into_iter() {
-    //                     fs.dealloc_data(data_block);
-    //                 }
-    //             });
-    //             // 这里需要在EasyFileSystem中实现dealloc_inode方法
-    //             fs.inode_bitmap.dealloc(&self.block_device, inode_id as usize);
-    //         }
-    //         0
-    //     });
-    //     block_cache_sync_all();
-    //     res
-    // }
     /// unlink the link to a inode
     pub fn unlinkat(&self, path: &str) -> isize {
         let mut fs = self.fs.lock();
@@ -359,22 +274,6 @@ impl Inode {
                 return -1;
             }
             let idx = found_idx.unwrap();
-            // 检查inode是否被其他目录项引用
-            let mut referenced = false;
-            let mut check_dirent = DirEntry::empty();
-            for i in 0..file_count {
-                if i == idx {
-                    continue;
-                }
-                assert_eq!(
-                    root_inode.read_at(DIRENT_SZ * i, check_dirent.as_bytes_mut(), &self.block_device,),
-                    DIRENT_SZ,
-                );
-                if check_dirent.inode_id() as u32 == inode_id {
-                    referenced = true;
-                    break;
-                }
-            }
             // 若被删除的目录项不在最后，则需要将最后一个目录项移动到被删除的目录项的位置
             let mut last_dirent = DirEntry::empty();
             if idx < file_count - 1 {
@@ -393,6 +292,12 @@ impl Inode {
                     disk_inode.nlink -= 1;
                 });
             // 若被删除的目录项的inode没有被其他目录项引用，则可以直接删除inode
+            // 获取目标 inode 的 nlink 值
+            let nlink = get_block_cache(block_id as usize, Arc::clone(&self.block_device))
+                .lock()
+                .read(block_offset, |disk_inode: &DiskInode| disk_inode.nlink);
+            // 直接使用 nlink 判断是否被引用
+            let referenced = nlink > 0;
             if !referenced {
                 target_inode.modify_disk_inode(|disk_inode| {
                     let size = disk_inode.size;
