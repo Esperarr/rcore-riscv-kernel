@@ -3,7 +3,9 @@ use crate::{
     task::{add_task, current_task, TaskControlBlock},
     trap::{trap_handler, TrapContext},
 };
-use alloc::sync::Arc;
+use core::ops::DerefMut;
+
+use alloc::{sync::Arc, vec::Vec};
 /// thread create syscall
 pub fn sys_thread_create(entry: usize, arg: usize) -> isize {
     trace!(
@@ -37,10 +39,21 @@ pub fn sys_thread_create(entry: usize, arg: usize) -> isize {
     let mut process_inner = process.inner_exclusive_access();
     // add new thread to current process
     let tasks = &mut process_inner.tasks;
-    while tasks.len() < new_task_tid + 1 {
-        tasks.push(None);
-    }
+    // 扩容 tasks 并在目标索引处插入 new_task
+    tasks.resize(new_task_tid + 1, None);
     tasks[new_task_tid] = Some(Arc::clone(&new_task));
+    let process_inner = process_inner.deref_mut(); 
+    extend_matrix(&mut process_inner.mutex_info.allocation, new_task_tid + 1);
+    extend_matrix(&mut process_inner.mutex_info.need, new_task_tid + 1);
+    extend_matrix(&mut process_inner.semaphore_info.allocation, new_task_tid + 1);
+    extend_matrix(&mut process_inner.semaphore_info.need, new_task_tid + 1);
+    // 初始化新线程的资源状态
+    let mutex_count = process_inner.mutex_list.len();
+    let sem_count = process_inner.semaphore_list.len();
+    resize_entry(&mut process_inner.mutex_info.allocation[new_task_tid], mutex_count);
+    resize_entry(&mut process_inner.mutex_info.need[new_task_tid], mutex_count);
+    resize_entry(&mut process_inner.semaphore_info.allocation[new_task_tid], sem_count);
+    resize_entry(&mut process_inner.semaphore_info.need[new_task_tid], sem_count);
     let new_task_trap_cx = new_task_inner.get_trap_cx();
     *new_task_trap_cx = TrapContext::app_init_context(
         entry,
@@ -118,3 +131,15 @@ pub fn sys_waittid(tid: usize) -> i32 {
         -2
     }
 }
+fn resize_entry<T: Default + Copy>(vec_opt: &mut Option<Vec<Option<T>>>, count: usize) {
+    if let Some(vec) = vec_opt.as_mut() {
+        vec.resize(count, Some(T::default()));
+    }
+}
+fn extend_matrix<T>(matrix: &mut Vec<Option<Vec<Option<T>>>>, len: usize)
+where
+    T: Default,
+{
+    matrix.resize_with(len, || Some(Vec::new()));
+}
+

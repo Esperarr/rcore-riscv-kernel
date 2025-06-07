@@ -49,6 +49,25 @@ pub struct ProcessControlBlockInner {
     pub semaphore_list: Vec<Option<Arc<Semaphore>>>,
     /// condvar list
     pub condvar_list: Vec<Option<Arc<Condvar>>>,
+    /// mutex info
+    pub mutex_info: MutexResourceMatrix,
+    /// semaphore info
+    pub semaphore_info: SemaphoreResourceMatrix,
+    /// 死锁检测开关
+    pub deadlock_detection_enabled: bool,
+}
+/// 互斥锁相关资源状态
+pub struct MutexResourceMatrix {
+    pub available: Vec<Option<u8>>,
+    pub allocation: Vec<Option<Vec<Option<u8>>>>,
+    pub need: Vec<Option<Vec<Option<u8>>>>,
+}
+
+/// 信号量相关资源状态
+pub struct SemaphoreResourceMatrix {
+    pub available: Vec<Option<u8>>,
+    pub allocation: Vec<Option<Vec<Option<u8>>>>,
+    pub need: Vec<Option<Vec<Option<u8>>>>,
 }
 
 impl ProcessControlBlockInner {
@@ -82,8 +101,148 @@ impl ProcessControlBlockInner {
     pub fn get_task(&self, tid: usize) -> Arc<TaskControlBlock> {
         self.tasks[tid].as_ref().unwrap().clone()
     }
+    /// 检查互斥锁请求是否安全
+    pub fn check_mutex_safety(&self, _tid: usize, mutex_id: usize) -> bool {
+        if !self.deadlock_detection_enabled {
+            return true;
+        }
+        // 检查是否有足够的资源
+        if let Some(avail) = self.mutex_info.available.get(mutex_id) {
+            if avail.unwrap_or(0) > 0 {
+                return true;
+            }
+        }
+        // 检查是否有线程持有该资源
+        let mut has_holder = false;
+        for thread_id in 0..self.mutex_info.allocation.len() {
+            if let Some(alloc) = &self.mutex_info.allocation[thread_id] {
+                if let Some(val) = alloc.get(mutex_id) {
+                    if val.unwrap_or(0) > 0 {
+                        has_holder = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if !has_holder {
+            return true;
+        }
+        // 算法主体
+        let mut work = self.mutex_info.available.clone();
+        let mut finish = vec![false; self.mutex_info.allocation.len()];
+        // 首先标记所有不需要资源的线程为完成
+        for thread_id in 0..self.mutex_info.allocation.len() {
+            if let (Some(alloc), Some(need)) = (&self.mutex_info.allocation[thread_id], &self.mutex_info.need[thread_id]) {
+                let mut can_finish = true;
+                for resource_id in 0..need.len() {
+                    if need[resource_id].unwrap_or(0) > 0 {
+                        can_finish = false;
+                        break;
+                    }
+                }
+                if can_finish {
+                    finish[thread_id] = true;
+                    // 释放该线程持有的资源
+                    for resource_id in 0..alloc.len() {
+                        if let Some(val) = work.get_mut(resource_id) {
+                            *val = Some(val.unwrap_or(0) + alloc[resource_id].unwrap_or(0));
+                        }
+                    }
+                }
+            }
+        }
+        // 循环查找能满足条件的线程
+        // 假设最多循环 N 次，避免死循环
+        let max_rounds = self.mutex_info.allocation.len();
+        for _round in 0..max_rounds {
+            let mut found = false;
+            for thread_id in 0..self.mutex_info.allocation.len() {
+                if !finish[thread_id] {
+                    if let (Some(alloc), Some(need)) = (&self.mutex_info.allocation[thread_id], &self.mutex_info.need[thread_id]) {
+                        let mut can_allocate = true;
+                        for resource_id in 0..need.len() {
+                            if need[resource_id].unwrap_or(0) > work[resource_id].unwrap_or(0) {
+                                can_allocate = false;
+                                break;
+                            }
+                        }
+                        if can_allocate {
+                            finish[thread_id] = true;
+                            found = true;
+                            for resource_id in 0..alloc.len() {
+                                if let Some(val) = work.get_mut(resource_id) {
+                                    *val = Some(val.unwrap_or(0) + alloc[resource_id].unwrap_or(0));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if !found {
+                break;
+            }
+        }
+        // 检查所有线程是否都已完成，如果是，则安全
+        finish.iter().all(|&x| x)
+    }
+    /// 检查信号量请求是否安全
+    pub fn check_semaphore_safety(&self, _tid: usize, _sem_id: usize) -> bool {
+        // 如果死锁检测未启用，则默认安全
+        if !self.deadlock_detection_enabled {
+            return true;
+        }
+        let mut work = self.semaphore_info.available.clone();
+        // 标记所有线程未完成
+        let mut finish = vec![false; self.semaphore_info.allocation.len()];
+        // 标记已经完成的线程
+        // 如果线程当前不需要任何资源，则它可视为已完成，释放资源回 Work
+        for i in 0..self.semaphore_info.allocation.len() {
+            if let (Some(alloc), Some(need)) = (&self.semaphore_info.allocation[i], &self.semaphore_info.need[i]) {
+                // 判断该线程是否无资源需求
+                let no_need = need.iter().all(|&n| n.unwrap_or(0) == 0);
+                if no_need {
+                    finish[i] = true;
+                    // 释放该线程已分配的资源
+                    for j in 0..alloc.len() {
+                        if let Some(w) = work.get_mut(j) {
+                            *w = Some(w.unwrap_or(0) + alloc[j].unwrap_or(0));
+                        }
+                    }
+                }
+            }
+        }
+        // 循环查找能满足条件的线程
+        // 假设最多循环 N 次，避免死循环
+        for _round in 0..self.semaphore_info.allocation.len() {
+            let mut progress = false;
+            for i in 0..self.semaphore_info.allocation.len() {
+                if !finish[i] {
+                    if let (Some(_alloc), Some(need)) = (&self.semaphore_info.allocation[i], &self.semaphore_info.need[i]) {
+                        let can_allocate = need.iter().enumerate().all(|(j, &req)| {
+                            req.unwrap_or(0) <= work.get(j).unwrap_or(&Some(0)).unwrap_or(0)
+                        });
+                        if can_allocate {
+                            finish[i] = true;
+                            progress = true;
+                            if let Some(alloc) = &self.semaphore_info.allocation[i] {
+                                for j in 0..alloc.len() {
+                                    if let Some(w) = work.get_mut(j) {
+                                        *w = Some(w.unwrap_or(0) + alloc[j].unwrap_or(0));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if !progress {
+                break;
+            }
+        }
+        // 检查所有线程是否都已完成，如果是，则安全
+        finish.iter().all(|&done| done)
+    }
 }
-
 impl ProcessControlBlock {
     /// inner_exclusive_access
     pub fn inner_exclusive_access(&self) -> RefMut<'_, ProcessControlBlockInner> {
@@ -119,6 +278,17 @@ impl ProcessControlBlock {
                     mutex_list: Vec::new(),
                     semaphore_list: Vec::new(),
                     condvar_list: Vec::new(),
+                    mutex_info: MutexResourceMatrix {
+                        available: Vec::new(),
+                        allocation: Vec::new(),
+                        need: Vec::new(),
+                    },
+                    semaphore_info: SemaphoreResourceMatrix {
+                        available: Vec::new(),
+                        allocation: Vec::new(),
+                        need: Vec::new(),
+                    },
+                    deadlock_detection_enabled: false,
                 })
             },
         });
@@ -144,6 +314,12 @@ impl ProcessControlBlock {
         // add main thread to the process
         let mut process_inner = process.inner_exclusive_access();
         process_inner.tasks.push(Some(Arc::clone(&task)));
+        process_inner.mutex_info.allocation.push(Some(Vec::new()));
+        process_inner.mutex_info.need.push(Some(Vec::new()));
+        process_inner.mutex_info.available.push(Some(0));
+        process_inner.semaphore_info.allocation.push(Some(Vec::new()));
+        process_inner.semaphore_info.need.push(Some(Vec::new()));
+        process_inner.semaphore_info.available.push(Some(0));
         drop(process_inner);
         insert_into_pid2process(process.getpid(), Arc::clone(&process));
         // add main thread to scheduler
@@ -245,6 +421,17 @@ impl ProcessControlBlock {
                     mutex_list: Vec::new(),
                     semaphore_list: Vec::new(),
                     condvar_list: Vec::new(),
+                    mutex_info: MutexResourceMatrix {
+                        available: Vec::new(),
+                        allocation: Vec::new(),
+                        need: Vec::new(),
+                    },
+                    semaphore_info: SemaphoreResourceMatrix {
+                        available: Vec::new(),
+                        allocation: Vec::new(),
+                        need: Vec::new(),
+                    },
+                    deadlock_detection_enabled: parent.deadlock_detection_enabled,
                 })
             },
         });
@@ -267,6 +454,12 @@ impl ProcessControlBlock {
         // attach task to child process
         let mut child_inner = child.inner_exclusive_access();
         child_inner.tasks.push(Some(Arc::clone(&task)));
+        child_inner.mutex_info.allocation.push(Some(Vec::new()));
+        child_inner.mutex_info.need.push(Some(Vec::new()));
+        child_inner.mutex_info.available.push(Some(0));
+        child_inner.semaphore_info.allocation.push(Some(Vec::new()));
+        child_inner.semaphore_info.need.push(Some(Vec::new()));
+        child_inner.semaphore_info.available.push(Some(0));
         drop(child_inner);
         // modify kstack_top in trap_cx of this thread
         let task_inner = task.inner_exclusive_access();
