@@ -1,24 +1,64 @@
-name: Jobs
+name: Rust checks
 
-on: [push]
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+  workflow_dispatch:
 
-env:
-  CARGO_TERM_COLOR: always
-  rust_toolchain: nightly-2022-08-05
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  gitlab-mirror:
-    if: github.repository == 'LearningOS/rCore-Tutorial-Code-2025S'
+  rust-check:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v1
-    - name: Mirror + trigger CI
-      uses: tkf2019/gitlab-mirror-and-ci-action@master
-      with:
-        args: "https://git.tsinghua.edu.cn/os-lab/2025S/public/rcore-tutorial-code-2025S"
-      env:
-        GITLAB_HOSTNAME: "git.tsinghua.edu.cn"
-        GITLAB_PROJECT_ID: "37679"
-        GITLAB_PROJECT_NAME: "rcore-tutorial-code-2025S"
-        GITLAB_PROJECT_TOKEN: ${{secrets.GITLAB_PROJECT_TOKEN}}
-        GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
+      - uses: actions/checkout@v4
+
+      - name: Detect project sources
+        id: source
+        shell: bash
+        run: |
+          if [[ -f os/Cargo.toml ]]; then
+            echo "kernel=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "kernel=false" >> "$GITHUB_OUTPUT"
+          fi
+          if [[ -f easy-fs/Cargo.toml ]]; then
+            echo "easyfs=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "easyfs=false" >> "$GITHUB_OUTPUT"
+          fi
+          if [[ -f easy-fs-fuse/Cargo.toml ]]; then
+            echo "fsimage=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "fsimage=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install Rust toolchain
+        if: steps.source.outputs.kernel == 'true'
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: nightly-2024-05-02
+          target: riscv64gc-unknown-none-elf
+          components: rust-src, llvm-tools-preview
+
+      - name: Check easy-fs
+        if: steps.source.outputs.easyfs == 'true'
+        run: cargo check --manifest-path easy-fs/Cargo.toml
+
+      - name: Check filesystem image tool
+        if: steps.source.outputs.fsimage == 'true'
+        run: cargo check --manifest-path easy-fs-fuse/Cargo.toml
+
+      - name: Check RISC-V kernel
+        if: steps.source.outputs.kernel == 'true'
+        run: |
+          cargo check \
+            --manifest-path os/Cargo.toml \
+            --target riscv64gc-unknown-none-elf
